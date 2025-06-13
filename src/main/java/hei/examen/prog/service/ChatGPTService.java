@@ -1,16 +1,26 @@
 package hei.examen.prog.service;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 @Service
+@Slf4j // Ajout de l'annotation Lombok pour les logs
 public class ChatGPTService {
 
   @Value("${CHAT_GPT_API_KEY}")
@@ -45,21 +55,77 @@ public class ChatGPTService {
     HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(requestBody, headers);
 
     try {
-      String response = restTemplate.postForObject(chatGptApiUrl, requestEntity, String.class);
+      ResponseEntity<ChatCompletionResponse> responseEntity =
+          restTemplate.postForEntity(chatGptApiUrl, requestEntity, ChatCompletionResponse.class);
 
-      assert response != null;
-      int contentIndex = response.indexOf("\"content\":\"");
-      if (contentIndex != -1) {
-        String sub = response.substring(contentIndex + "\"content\":\"".length());
-        int endIndex = sub.indexOf("\"");
-        if (endIndex != -1) {
-          return sub.substring(0, endIndex).replace("\\n", "\n").replace("\\\"", "\"");
+      if (responseEntity.getStatusCode().is2xxSuccessful() && responseEntity.getBody() != null) {
+        ChatCompletionResponse chatResponse = responseEntity.getBody();
+        if (chatResponse.getChoices() != null && !chatResponse.getChoices().isEmpty()) {
+          return chatResponse.getChoices().getFirst().getMessage().getContent();
         }
       }
+      log.warn("ChatGPT API did not return a valid definition for word: {}", word);
       return "Définition introuvable pour le mot : " + word;
 
+    } catch (HttpClientErrorException e) {
+      log.error(
+          "Erreur de l'API ChatGPT (HTTP {}): {}",
+          e.getStatusCode(),
+          e.getResponseBodyAsString(),
+          e);
+      throw new RuntimeException(
+          "Erreur de l'API ChatGPT: " + e.getStatusCode() + " - " + e.getResponseBodyAsString(), e);
+    } catch (ResourceAccessException e) {
+      log.error("Erreur de connexion à l'API ChatGPT: {}", e.getMessage(), e);
+      throw new RuntimeException("Problème de connexion à l'API ChatGPT", e);
     } catch (Exception e) {
-      throw new RuntimeException(e);
+      log.error("Erreur inattendue lors de l'appel à l'API ChatGPT", e);
+      throw new RuntimeException("Erreur inattendue lors de l'appel à l'API ChatGPT", e);
     }
   }
+}
+
+@Getter
+@Setter
+@NoArgsConstructor
+class ChatCompletionResponse {
+  private String id;
+  private String object;
+  private long created;
+  private String model;
+  private List<Choice> choices;
+  private Usage usage;
+}
+
+@Getter
+@Setter
+@NoArgsConstructor
+class Choice {
+  private int index;
+  private Message message;
+
+  @JsonProperty("finish_reason")
+  private String finishReason;
+}
+
+@Getter
+@Setter
+@NoArgsConstructor
+class Message {
+  private String role;
+  private String content;
+}
+
+@Getter
+@Setter
+@NoArgsConstructor
+class Usage {
+  @JsonProperty("prompt_tokens")
+  private int promptTokens;
+
+  @JsonProperty("completion_tokens")
+  private int completionTokens;
+
+  @JsonProperty("total_tokens")
+  private int totalTokens;
 }
